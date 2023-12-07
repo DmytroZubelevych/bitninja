@@ -8,7 +8,7 @@ homepage: https://bitninja.io/
 baseUrl: https://raw.githubusercontent.com/jelastic-jps/bitninja/main
 
 onBeforeInit: |
-  var resp = jelastic.dev.scripting.Eval("a498b13745283f7f3dbab7a31ed7d348", session, "wizard.ui", {
+  var resp = api.dev.scripting.Eval("a498b13745283f7f3dbab7a31ed7d348", session, "wizard.ui", {
     groupType: "${account.groupType:}",
     uid: "${user.uid}"
   });
@@ -127,9 +127,15 @@ onAfterClone:
 onAfterRedeployContainer:
   - if ('${event.params.nodeGroup}' == '${targetNodes.nodeGroup}'):
       cmd [${targetNodes.nodeGroup}]: |-
-        grep -q 'AlmaLinux' /etc/system-release && { yum install -y initscripts libxcrypt-compat; rpm -Uvh http://rpm.bitninja.io/1.0/noarch/bitninja-repo-1.0-1.noarch.rpm; sed -i 's|baseurl=.*|baseurl=http://rpm.bitninja.io/8/$basearch|g' /etc/yum.repos.d/BitNinja.repo; yum -y install bitninja; } || { rpm -Uvh http://rpm.bitninja.io/1.0/noarch/bitninja-repo-1.0-1.noarch.rpm; }
-        yum -y install bitninja
-        service bitninja restart
+        yum -y remove bitninja-repo; rm -f /etc/yum.repos.d/BitNinja.repo
+        if grep -q 'AlmaLinux' /etc/system-release; then 
+            yum install -y initscripts libxcrypt-compat && \
+            rpm -Uvh http://rpm.bitninja.io/1.0/noarch/bitninja-repo-1.0-1.noarch.rpm && \
+            sed -i 's|baseurl=.*|baseurl=http://rpm.bitninja.io/8/$basearch|g' /etc/yum.repos.d/BitNinja.repo;
+        else 
+            rpm -Uvh http://rpm.bitninja.io/1.0/noarch/bitninja-repo-1.0-1.noarch.rpm;
+        fi
+        yum -y install bitninja && service bitninja restart
       user: root
   - disableIPForwarding
   - makeLogsVisible
@@ -176,7 +182,9 @@ onBeforeDelete: uninstallBitninja
 
 onUninstall: uninstallBitninja
 
-onInstall: setupBitninja
+onInstall: 
+  - deleteLicenses
+  - setupBitninja
 
 actions:
   setupBitninja:
@@ -184,6 +192,10 @@ actions:
         script: |
           return { result: "warning", message: "Target node cloudlets count are not satisfied [BitNinja system requirements](https://doc.bitninja.io/docs/Installation/system_requirements)" }
     - manageLicenses
+    - if (response.length == 0):
+        stopEvent:
+          type: error
+          message: No license keys received. 
     - forEach(license:response.licenses):
         installAgent:
           licenseKey: ${@license.licenseKey}
@@ -201,9 +213,13 @@ actions:
         allowFirewallPorts
   
   reinstallBitNinja: 
-    - cmd[${targetNodes.master.id}]: /etc/init.d/bitninja restart
+    - cmd[${targetNodes.master.id}]: service bitninja restart
       user: root
     - manageLicenses
+    - if (response.length == 0):
+        stopEvent:
+          type: error
+          message: No license keys received. 
     - forEach(license:response.licenses):
         - uninstallAgent: ${@license.id}
         - removeLogs: ${@license.id}
@@ -239,13 +255,13 @@ actions:
           envName: "${env.name}",
           action: "${this:}"
         };
-        var resp = jelastic.dev.scripting.Eval("a498b13745283f7f3dbab7a31ed7d348", session, "license", params);
+        var resp = api.dev.scripting.Eval("a498b13745283f7f3dbab7a31ed7d348", session, "license", params);
         return resp.response ? resp.response:resp;
 
   uninstallAgent:
     cmd [${this}]: |-
-      service bitninja stop; yum -y remove 'bitninja*'; 
-      rm -Rf /opt/bitninja*; rm -Rf /var/lib/bitninja*; rm -Rf /etc/bitninja*;
+      service bitninja stop; yum -y remove 'bitninja*'; yum clean all;
+      rm -Rf /opt/bitninja* /var/lib/bitninja* /etc/bitninja* /etc/yum.repos.d/BitNinja.repo /etc/yum.repos.d/BitNinja.repo.rpmsave;
       sed -i "s|;/etc/bitninja||g" ${globals.EXTEND_PERM}
       jem filemanager extendperm
     user: root
@@ -259,15 +275,15 @@ actions:
     user: root
 
   installAgent:
-    cmd [${this.id}]: |-
-      grep -q 'AlmaLinux' /etc/system-release && { yum install -y initscripts libxcrypt-compat; rpm -Uvh http://rpm.bitninja.io/1.0/noarch/bitninja-repo-1.0-1.noarch.rpm; sed -i 's|baseurl=.*|baseurl=http://rpm.bitninja.io/8/$basearch|g' /etc/yum.repos.d/BitNinja.repo; yum install bitninja; }
-      curl https://get.bitninja.io/install.sh | /bin/bash -s - --license_key='${this.licenseKey}' -y --serverConfigurationMetadata='{"label": "${targetNodes.nodeType}", "provider": "jelastic" }' --environmentSpecification='{"nodeGroup": "${targetNodes.nodeGroup}", "environmentName": "${env.name}", "environmentDomain": "${env.domain}" }'
-    user: root
+    - cmd [${this.id}]: |-
+        yum -y remove bitninja-repo; rm -f /etc/yum.repos.d/BitNinja.repo /etc/yum.repos.d/BitNinja.repo.rpmsave; yum clean all;
+        curl https://get.bitninja.io/install.sh | /bin/bash -s - --license_key='${this.licenseKey}' -y --serverConfigurationMetadata='{"label": "${targetNodes.nodeType}", "provider": "jelastic" }' --environmentSpecification='{"nodeGroup": "${targetNodes.nodeGroup}", "environmentName": "${env.name}", "environmentDomain": "${env.domain}" }'
+      user: root
 
   enableInitScript:
     cmd [group]: |-
-      curl  -fsSL "${baseUrl}/scripts/init.sh" -o /etc/rc.d/init.d/jelastic-bitninja
-      chmod +x /etc/rc.d/init.d/jelastic-bitninja
+      curl  -fsSL "${baseUrl}/scripts/init.sh" -o /etc/rc.d/init.d/jelastic-bitninja && \
+      chmod +x /etc/rc.d/init.d/jelastic-bitninja && \
       chkconfig --add jelastic-bitninja
     user: root
 
