@@ -192,8 +192,8 @@ actions:
         script: |
           return { result: "warning", message: "Target node cloudlets count are not satisfied [BitNinja system requirements](https://doc.bitninja.io/docs/Installation/system_requirements)" }
     - manageLicenses
-    - if (response.length == 0):
-        stopEvent:
+    - if ('${response.licenses.length:0}' == '0''):
+        return:
           type: error
           message: No license keys received. 
     - forEach(license:response.licenses):
