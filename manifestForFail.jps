@@ -194,7 +194,7 @@ actions:
     - manageLicenses
     - return:
         type: error
-        message: No license keys received. 
+        message: Installation interrupted. 
     - forEach(license:response.licenses):
         installAgent:
           licenseKey: ${@license.licenseKey}
